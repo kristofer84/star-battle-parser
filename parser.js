@@ -1,5 +1,4 @@
 // Star Battle puzzle screenshot parser
-// Returns a formatted string representing the puzzle grid
 
 export async function parsePuzzle(imageSource, gridSize) {
   const img = await loadImage(imageSource);
@@ -11,10 +10,7 @@ export async function parsePuzzle(imageSource, gridSize) {
   const cellW = grid.w / n;
   const cellH = grid.h / n;
 
-  const regionColors = [];
-  const colorMap = new Map(); // colorKey -> regionId
-  let nextId = 0;
-
+  const centroids = [];
   const regions = Array.from({ length: n }, () => new Array(n).fill(0));
   const marks = Array.from({ length: n }, () => new Array(n).fill(''));
 
@@ -22,21 +18,47 @@ export async function parsePuzzle(imageSource, gridSize) {
     for (let c = 0; c < n; c++) {
       const cx = grid.x + (c + 0.5) * cellW;
       const cy = grid.y + (r + 0.5) * cellH;
-
-      const bg = sampleBackground(ctx, cx, cy, cellW * 0.25);
-      const key = quantizeColor(bg);
-
-      if (!colorMap.has(key)) {
-        colorMap.set(key, nextId++);
-        regionColors.push(bg);
-      }
-      regions[r][c] = colorMap.get(key);
-
+      const bg = sampleBackground(ctx, cx, cy, cellW, cellH);
+      regions[r][c] = matchOrCreateRegion(bg, centroids, 50);
       marks[r][c] = detectMark(ctx, cx, cy, cellW, cellH);
     }
   }
 
   return formatOutput(regions, marks, n);
+}
+
+// Also export grid + cell data for debug overlay
+export async function parsePuzzleDebug(imageSource, gridSize) {
+  const img = await loadImage(imageSource);
+  const { canvas, ctx } = toCanvas(img);
+  const grid = findGridBounds(ctx, canvas.width, canvas.height);
+  if (!grid) throw new Error('Could not detect puzzle grid');
+
+  const n = gridSize;
+  const cellW = grid.w / n;
+  const cellH = grid.h / n;
+
+  const centroids = [];
+  const regions = Array.from({ length: n }, () => new Array(n).fill(0));
+  const marks = Array.from({ length: n }, () => new Array(n).fill(''));
+  const bgColors = Array.from({ length: n }, () => new Array(n).fill(null));
+
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const cx = grid.x + (c + 0.5) * cellW;
+      const cy = grid.y + (r + 0.5) * cellH;
+      const bg = sampleBackground(ctx, cx, cy, cellW, cellH);
+      regions[r][c] = matchOrCreateRegion(bg, centroids, 50);
+      marks[r][c] = detectMark(ctx, cx, cy, cellW, cellH);
+      bgColors[r][c] = bg;
+    }
+  }
+
+  return {
+    text: formatOutput(regions, marks, n),
+    grid, cellW, cellH, n,
+    regions, marks, bgColors, centroids
+  };
 }
 
 function loadImage(src) {
@@ -58,84 +80,135 @@ function toCanvas(img) {
   return { canvas, ctx };
 }
 
+// Find the puzzle grid by computing per-row/column brightness profiles,
+// then finding the longest continuous bright band in each axis.
+// This handles screenshots on dark phone backgrounds correctly.
 function findGridBounds(ctx, w, h) {
   const data = ctx.getImageData(0, 0, w, h).data;
 
-  const isDark = (x, y) => {
-    if (x < 0 || y < 0 || x >= w || y >= h) return false;
+  const brightness = (x, y) => {
     const i = (y * w + x) * 4;
-    return data[i] < 80 && data[i + 1] < 80 && data[i + 2] < 80;
+    return (data[i] + data[i + 1] + data[i + 2]) / 3;
   };
 
-  // Find bounding box of dark pixels
-  let x0 = w, y0 = h, x1 = 0, y1 = 0;
+  // Row profile: average brightness per row (sample every 2px for speed)
+  const rowBright = new Float32Array(h);
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (isDark(x, y)) {
-        if (x < x0) x0 = x;
-        if (y < y0) y0 = y;
-        if (x > x1) x1 = x;
-        if (y > y1) y1 = y;
-      }
-    }
+    let sum = 0;
+    for (let x = 0; x < w; x += 2) sum += brightness(x, y);
+    rowBright[y] = sum / (w / 2);
   }
 
-  if (x1 <= x0 || y1 <= y0) return null;
+  const colBright = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    let sum = 0;
+    for (let y = 0; y < h; y += 2) sum += brightness(x, y);
+    colBright[x] = sum / (h / 2);
+  }
 
-  // Inset slightly to skip the outer border itself
-  const pad = Math.round(Math.min((x1 - x0), (y1 - y0)) * 0.015) + 2;
+  // Find longest run above 30% of peak — that's the puzzle area
+  const rowPeak = Math.max(...rowBright);
+  const colPeak = Math.max(...colBright);
+  const { start: y0, end: y1 } = longestRun(rowBright, rowPeak * 0.30, 8);
+  const { start: x0, end: x1 } = longestRun(colBright, colPeak * 0.30, 8);
+
+  if (y0 < 0 || x0 < 0 || y1 <= y0 || x1 <= x0) return null;
+
+  // Inset a tiny amount to skip the outer frame border
+  const pad = Math.round(Math.min(x1 - x0, y1 - y0) * 0.012) + 1;
   return { x: x0 + pad, y: y0 + pad, w: (x1 - x0) - pad * 2, h: (y1 - y0) - pad * 2 };
 }
 
-// Sample background color from a small center patch, avoiding cell marks
-function sampleBackground(ctx, cx, cy, radius) {
-  const r = Math.max(2, Math.round(radius));
-  const px = ctx.getImageData(Math.round(cx - r), Math.round(cy - r), r * 2, r * 2).data;
-
-  // Collect non-dark, non-red pixels (skip marks)
-  const samples = [];
-  for (let i = 0; i < px.length; i += 4) {
-    const [R, G, B] = [px[i], px[i + 1], px[i + 2]];
-    const isDark = R < 60 && G < 60 && B < 60;
-    const isRedMark = R > 150 && G < 100 && B < 100;
-    if (!isDark && !isRedMark) samples.push([R, G, B]);
+// Longest run of values >= threshold, tolerating up to gapTol consecutive dips
+function longestRun(arr, threshold, gapTol) {
+  let bestStart = -1, bestLen = 0;
+  let start = -1, len = 0, gap = 0;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] >= threshold) {
+      if (start < 0) start = i;
+      len += gap + 1;
+      gap = 0;
+      if (len > bestLen) { bestLen = len; bestStart = start; }
+    } else {
+      gap++;
+      if (gap > gapTol) { start = -1; len = 0; gap = 0; }
+    }
   }
+  return { start: bestStart, end: bestStart >= 0 ? bestStart + bestLen - 1 : -1 };
+}
 
-  if (samples.length === 0) {
-    // fallback: single center pixel
+// Sample the cell background color.
+// Samples a 3×3 grid of points spread across the cell interior,
+// filters out dark border pixels and red X-mark pixels, returns median.
+function sampleBackground(ctx, cx, cy, cellW, cellH) {
+  const inset = Math.min(cellW, cellH) * 0.22;
+  const pts = [];
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = Math.round(cx + dx * (cellW * 0.28));
+      const y = Math.round(cy + dy * (cellH * 0.28));
+      const p = ctx.getImageData(x, y, 1, 1).data;
+      const [R, G, B] = [p[0], p[1], p[2]];
+      const isDark = R < 70 && G < 70 && B < 70;
+      const isRed = R > 140 && G < 120 && B < 120 && R > G + 40;
+      if (!isDark && !isRed) pts.push([R, G, B]);
+    }
+  }
+  if (pts.length === 0) {
     const p = ctx.getImageData(Math.round(cx), Math.round(cy), 1, 1).data;
     return [p[0], p[1], p[2]];
   }
-
-  const avg = samples.reduce(([ar, ag, ab], [r, g, b]) => [ar + r, ag + g, ab + b], [0, 0, 0]);
-  return avg.map(v => Math.round(v / samples.length));
+  // Return median by brightness
+  pts.sort((a, b) => (a[0] + a[1] + a[2]) - (b[0] + b[1] + b[2]));
+  return pts[Math.floor(pts.length / 2)];
 }
 
-// Quantize RGB to a string key for color grouping (tolerance ~20 per channel)
-function quantizeColor([r, g, b]) {
-  const q = 28;
-  return `${Math.round(r / q) * q},${Math.round(g / q) * q},${Math.round(b / q) * q}`;
+// Nearest-centroid region assignment with dynamic centroid creation
+function matchOrCreateRegion(color, centroids, threshold) {
+  let bestDist = Infinity, bestId = -1;
+  for (let i = 0; i < centroids.length; i++) {
+    const d = rgbDist(color, centroids[i]);
+    if (d < bestDist) { bestDist = d; bestId = i; }
+  }
+  if (bestDist < threshold) {
+    // Update centroid with exponential moving average (weight 0.15 for new sample)
+    const c = centroids[bestId];
+    centroids[bestId] = [
+      c[0] * 0.85 + color[0] * 0.15,
+      c[1] * 0.85 + color[1] * 0.15,
+      c[2] * 0.85 + color[2] * 0.15,
+    ];
+    return bestId;
+  }
+  centroids.push([color[0], color[1], color[2]]);
+  return centroids.length - 1;
+}
+
+function rgbDist([r1, g1, b1], [r2, g2, b2]) {
+  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
 }
 
 // Detect what mark is in a cell: '' | 'x' | 's'
+// Scans a region equal to 35% of cell size around the center.
+// Stars are large dark glyphs; X marks are red.
 function detectMark(ctx, cx, cy, cellW, cellH) {
-  const r = Math.max(2, Math.round(Math.min(cellW, cellH) * 0.3));
-  const px = ctx.getImageData(Math.round(cx - r), Math.round(cy - r), r * 2, r * 2).data;
+  const r = Math.max(3, Math.round(Math.min(cellW, cellH) * 0.35));
+  const sx = Math.round(cx - r), sy = Math.round(cy - r);
+  const side = r * 2;
+  const px = ctx.getImageData(sx, sy, side, side).data;
 
-  let redCount = 0;
-  let darkCount = 0;
+  let redCount = 0, darkCount = 0;
+  const total = side * side;
 
   for (let i = 0; i < px.length; i += 4) {
     const [R, G, B] = [px[i], px[i + 1], px[i + 2]];
-    // Red X mark
-    if (R > 150 && G < 110 && B < 110) redCount++;
-    // Dark star glyph (black on colored background)
     if (R < 80 && G < 80 && B < 80) darkCount++;
+    if (R > 140 && G < 120 && B < 120 && R > G + 40) redCount++;
   }
 
-  const total = (r * 2) * (r * 2);
-  if (darkCount / total > 0.08) return 's';
-  if (redCount / total > 0.04) return 'x';
+  // Stars are solid black shapes — larger dark area than X marks
+  if (darkCount / total > 0.06) return 's';
+  if (redCount / total > 0.03) return 'x';
   return '';
 }
 

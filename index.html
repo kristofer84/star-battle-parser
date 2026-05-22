@@ -18,7 +18,7 @@
       flex-direction: column;
       align-items: center;
       padding: 24px 16px;
-      gap: 20px;
+      gap: 16px;
     }
 
     h1 { font-size: 1.3rem; color: #a0c4ff; letter-spacing: 0.03em; }
@@ -28,20 +28,21 @@
       max-width: 480px;
       border: 2px dashed #334;
       border-radius: 12px;
-      padding: 32px 16px;
+      padding: 40px 16px;
       text-align: center;
       color: #778;
       cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
       user-select: none;
+      position: relative;
     }
     #drop-zone.has-image { border-color: #a0c4ff; padding: 0; overflow: hidden; }
     #drop-zone.drag-over { border-color: #a0c4ff; background: #1e2a3a; }
-    #drop-zone img { width: 100%; display: block; border-radius: 10px; }
+    #drop-zone canvas { width: 100%; display: block; border-radius: 10px; }
 
     .row {
       display: flex;
-      gap: 12px;
+      gap: 10px;
       align-items: center;
       width: 100%;
       max-width: 480px;
@@ -50,7 +51,7 @@
     label { font-size: 0.9rem; color: #aaa; white-space: nowrap; }
 
     input[type=number] {
-      width: 72px;
+      width: 66px;
       padding: 8px 10px;
       background: #0f172a;
       border: 1px solid #334;
@@ -74,6 +75,15 @@
     }
     button:hover { background: #2563eb; }
     button:disabled { background: #334; color: #556; cursor: default; }
+    button.secondary {
+      background: #1e293b;
+      font-weight: 400;
+      font-size: 0.9rem;
+      flex: 0 0 auto;
+      padding: 10px 14px;
+    }
+    button.secondary:hover { background: #263548; }
+    button.secondary.active { background: #0f3460; color: #a0c4ff; border: 1px solid #1d4ed8; }
 
     #file-input { display: none; }
 
@@ -85,12 +95,23 @@
       border-radius: 10px;
       padding: 14px;
       font-family: monospace;
-      font-size: 0.82rem;
+      font-size: 0.8rem;
       white-space: pre;
       overflow-x: auto;
-      line-height: 1.6;
+      line-height: 1.7;
       display: none;
     }
+
+    /* Debug grid overlay */
+    #debug-grid {
+      display: none;
+      width: 100%;
+      max-width: 480px;
+      border: 1px solid #334;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    #debug-grid canvas { width: 100%; display: block; }
 
     #toast {
       position: fixed;
@@ -107,6 +128,7 @@
       opacity: 0;
       pointer-events: none;
       white-space: nowrap;
+      z-index: 100;
     }
     #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
     #toast.error { background: #ef4444; }
@@ -119,49 +141,64 @@
 
   <div id="drop-zone" role="button" tabindex="0" aria-label="Tap to choose puzzle image">
     <div id="drop-label">Tap to choose image<br><small>or share from Android gallery</small></div>
-    <img id="preview" alt="puzzle preview" style="display:none">
+    <canvas id="preview-canvas" style="display:none"></canvas>
   </div>
   <input type="file" id="file-input" accept="image/*">
 
   <div class="row">
-    <label for="grid-size">Grid size</label>
+    <label for="grid-size">Grid</label>
     <input type="number" id="grid-size" value="10" min="5" max="16" step="1">
     <button id="parse-btn" disabled>Parse &amp; Copy</button>
+    <button class="secondary" id="debug-btn" disabled title="Show detected grid overlay">Grid</button>
   </div>
 
   <div id="status"></div>
   <pre id="result-box"></pre>
+  <div id="debug-grid"><canvas id="debug-canvas"></canvas></div>
 
   <div id="toast"></div>
 
   <script type="module">
-    import { parsePuzzle } from './parser.js';
+    import { parsePuzzle, parsePuzzleDebug } from './parser.js';
 
     const dropZone = document.getElementById('drop-zone');
-    const preview = document.getElementById('preview');
+    const previewCanvas = document.getElementById('preview-canvas');
     const dropLabel = document.getElementById('drop-label');
     const fileInput = document.getElementById('file-input');
     const parseBtn = document.getElementById('parse-btn');
+    const debugBtn = document.getElementById('debug-btn');
     const gridSizeInput = document.getElementById('grid-size');
     const resultBox = document.getElementById('result-box');
     const statusEl = document.getElementById('status');
     const toast = document.getElementById('toast');
+    const debugGrid = document.getElementById('debug-grid');
+    const debugCanvas = document.getElementById('debug-canvas');
 
     let currentDataUrl = null;
+    let debugShown = false;
 
     function setImage(dataUrl) {
       currentDataUrl = dataUrl;
-      preview.src = dataUrl;
-      preview.style.display = 'block';
+      const img = new Image();
+      img.onload = () => {
+        previewCanvas.width = img.naturalWidth;
+        previewCanvas.height = img.naturalHeight;
+        previewCanvas.getContext('2d').drawImage(img, 0, 0);
+        previewCanvas.style.display = 'block';
+      };
+      img.src = dataUrl;
       dropLabel.style.display = 'none';
       dropZone.classList.add('has-image');
       parseBtn.disabled = false;
+      debugBtn.disabled = false;
       resultBox.style.display = 'none';
-      statusEl.textContent = 'Image loaded. Tap "Parse & Copy" to parse.';
+      debugGrid.style.display = 'none';
+      debugShown = false;
+      debugBtn.classList.remove('active');
+      statusEl.textContent = 'Image loaded — tap Parse & Copy.';
     }
 
-    // Drop zone tap/click -> file picker
-    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('click', () => { if (!debugShown) fileInput.click(); });
     dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
 
     fileInput.addEventListener('change', () => {
@@ -172,7 +209,6 @@
       reader.readAsDataURL(file);
     });
 
-    // Drag-and-drop (desktop)
     dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
     dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
     dropZone.addEventListener('drop', e => {
@@ -185,7 +221,6 @@
       reader.readAsDataURL(file);
     });
 
-    // Paste
     document.addEventListener('paste', e => {
       const item = [...e.clipboardData.items].find(i => i.type.startsWith('image'));
       if (!item) return;
@@ -194,11 +229,10 @@
       reader.readAsDataURL(item.getAsFile());
     });
 
-    // Parse button
     parseBtn.addEventListener('click', async () => {
       if (!currentDataUrl) return;
       const n = parseInt(gridSizeInput.value, 10);
-      if (isNaN(n) || n < 5 || n > 16) { showToast('Grid size must be 5-16', true); return; }
+      if (isNaN(n) || n < 5 || n > 16) { showToast('Grid size must be 5–16', true); return; }
 
       parseBtn.disabled = true;
       statusEl.textContent = 'Parsing…';
@@ -208,13 +242,90 @@
         resultBox.textContent = result;
         resultBox.style.display = 'block';
         await navigator.clipboard.writeText(result);
-        showToast('Parsed & copied to clipboard!');
+        showToast('Parsed & copied!');
         statusEl.textContent = 'Done.';
       } catch (err) {
-        showToast('Parse failed: ' + err.message, true);
+        showToast(err.message, true);
         statusEl.textContent = 'Error: ' + err.message;
       } finally {
         parseBtn.disabled = false;
+      }
+    });
+
+    // Debug grid overlay: draw detected cells over the image
+    debugBtn.addEventListener('click', async () => {
+      if (!currentDataUrl) return;
+      const n = parseInt(gridSizeInput.value, 10);
+      if (isNaN(n) || n < 5 || n > 16) return;
+
+      if (debugShown) {
+        debugGrid.style.display = 'none';
+        debugShown = false;
+        debugBtn.classList.remove('active');
+        return;
+      }
+
+      debugBtn.disabled = true;
+      statusEl.textContent = 'Detecting grid…';
+
+      try {
+        const info = await parsePuzzleDebug(currentDataUrl, n);
+
+        // Draw the original image plus grid overlay
+        const img = new Image();
+        img.onload = () => {
+          const w = img.naturalWidth, h = img.naturalHeight;
+          debugCanvas.width = w;
+          debugCanvas.height = h;
+          const ctx = debugCanvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          const { grid, cellW, cellH, regions, marks, centroids } = info;
+
+          // Semitransparent overlay per cell showing region color
+          const palette = centroids.map(([r, g, b]) => `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},0.35)`);
+
+          for (let r = 0; r < n; r++) {
+            for (let c = 0; c < n; c++) {
+              const x = grid.x + c * cellW;
+              const y = grid.y + r * cellH;
+              ctx.fillStyle = palette[regions[r][c]] || 'rgba(255,0,255,0.3)';
+              ctx.fillRect(x, y, cellW, cellH);
+
+              // Draw region ID
+              ctx.fillStyle = '#fff';
+              ctx.font = `bold ${Math.round(cellW * 0.28)}px monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(`${regions[r][c]}${marks[r][c]}`, x + cellW / 2, y + cellH / 2);
+            }
+          }
+
+          // Draw grid lines
+          ctx.strokeStyle = '#00ff88';
+          ctx.lineWidth = Math.max(1, cellW * 0.04);
+          for (let i = 0; i <= n; i++) {
+            ctx.beginPath();
+            ctx.moveTo(grid.x + i * cellW, grid.y);
+            ctx.lineTo(grid.x + i * cellW, grid.y + grid.h);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(grid.x, grid.y + i * cellH);
+            ctx.lineTo(grid.x + grid.w, grid.y + i * cellH);
+            ctx.stroke();
+          }
+
+          debugGrid.style.display = 'block';
+          debugShown = true;
+          debugBtn.classList.add('active');
+          statusEl.textContent = `Grid detected at (${grid.x},${grid.y}) ${Math.round(grid.w)}×${Math.round(grid.h)}`;
+        };
+        img.src = currentDataUrl;
+      } catch (err) {
+        showToast(err.message, true);
+        statusEl.textContent = 'Error: ' + err.message;
+      } finally {
+        debugBtn.disabled = false;
       }
     });
 
@@ -226,7 +337,6 @@
       toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
     }
 
-    // Service worker messaging: receive shared image
     function checkSharedImage() {
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'get-shared-image' });
@@ -237,11 +347,8 @@
       if (e.data?.type === 'shared-image') setImage(e.data.dataUrl);
     });
 
-    // Register SW
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').then(() => {
-        checkSharedImage();
-      });
+      navigator.serviceWorker.register('/sw.js').then(() => checkSharedImage());
     }
   </script>
 </body>
