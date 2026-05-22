@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Star Battle Parser</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#16213e">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+      gap: 20px;
+    }
+
+    h1 { font-size: 1.3rem; color: #a0c4ff; letter-spacing: 0.03em; }
+
+    #drop-zone {
+      width: 100%;
+      max-width: 480px;
+      border: 2px dashed #334;
+      border-radius: 12px;
+      padding: 32px 16px;
+      text-align: center;
+      color: #778;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      user-select: none;
+    }
+    #drop-zone.has-image { border-color: #a0c4ff; padding: 0; overflow: hidden; }
+    #drop-zone.drag-over { border-color: #a0c4ff; background: #1e2a3a; }
+    #drop-zone img { width: 100%; display: block; border-radius: 10px; }
+
+    .row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    label { font-size: 0.9rem; color: #aaa; white-space: nowrap; }
+
+    input[type=number] {
+      width: 72px;
+      padding: 8px 10px;
+      background: #0f172a;
+      border: 1px solid #334;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 1rem;
+      text-align: center;
+    }
+
+    button {
+      flex: 1;
+      padding: 14px;
+      background: #1d4ed8;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { background: #334; color: #556; cursor: default; }
+
+    #file-input { display: none; }
+
+    #result-box {
+      width: 100%;
+      max-width: 480px;
+      background: #0f172a;
+      border: 1px solid #223;
+      border-radius: 10px;
+      padding: 14px;
+      font-family: monospace;
+      font-size: 0.82rem;
+      white-space: pre;
+      overflow-x: auto;
+      line-height: 1.6;
+      display: none;
+    }
+
+    #toast {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #22c55e;
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 24px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: transform 0.3s ease, opacity 0.3s ease;
+      opacity: 0;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    #toast.error { background: #ef4444; }
+
+    #status { font-size: 0.85rem; color: #778; min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <h1>Star Battle Parser</h1>
+
+  <div id="drop-zone" role="button" tabindex="0" aria-label="Tap to choose puzzle image">
+    <div id="drop-label">Tap to choose image<br><small>or share from Android gallery</small></div>
+    <img id="preview" alt="puzzle preview" style="display:none">
+  </div>
+  <input type="file" id="file-input" accept="image/*">
+
+  <div class="row">
+    <label for="grid-size">Grid size</label>
+    <input type="number" id="grid-size" value="10" min="5" max="16" step="1">
+    <button id="parse-btn" disabled>Parse &amp; Copy</button>
+  </div>
+
+  <div id="status"></div>
+  <pre id="result-box"></pre>
+
+  <div id="toast"></div>
+
+  <script type="module">
+    import { parsePuzzle } from './parser.js';
+
+    const dropZone = document.getElementById('drop-zone');
+    const preview = document.getElementById('preview');
+    const dropLabel = document.getElementById('drop-label');
+    const fileInput = document.getElementById('file-input');
+    const parseBtn = document.getElementById('parse-btn');
+    const gridSizeInput = document.getElementById('grid-size');
+    const resultBox = document.getElementById('result-box');
+    const statusEl = document.getElementById('status');
+    const toast = document.getElementById('toast');
+
+    let currentDataUrl = null;
+
+    function setImage(dataUrl) {
+      currentDataUrl = dataUrl;
+      preview.src = dataUrl;
+      preview.style.display = 'block';
+      dropLabel.style.display = 'none';
+      dropZone.classList.add('has-image');
+      parseBtn.disabled = false;
+      resultBox.style.display = 'none';
+      statusEl.textContent = 'Image loaded. Tap "Parse & Copy" to parse.';
+    }
+
+    // Drop zone tap/click -> file picker
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => setImage(e.target.result);
+      reader.readAsDataURL(file);
+    });
+
+    // Drag-and-drop (desktop)
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => setImage(ev.target.result);
+      reader.readAsDataURL(file);
+    });
+
+    // Paste
+    document.addEventListener('paste', e => {
+      const item = [...e.clipboardData.items].find(i => i.type.startsWith('image'));
+      if (!item) return;
+      const reader = new FileReader();
+      reader.onload = ev => setImage(ev.target.result);
+      reader.readAsDataURL(item.getAsFile());
+    });
+
+    // Parse button
+    parseBtn.addEventListener('click', async () => {
+      if (!currentDataUrl) return;
+      const n = parseInt(gridSizeInput.value, 10);
+      if (isNaN(n) || n < 5 || n > 16) { showToast('Grid size must be 5-16', true); return; }
+
+      parseBtn.disabled = true;
+      statusEl.textContent = 'Parsing…';
+
+      try {
+        const result = await parsePuzzle(currentDataUrl, n);
+        resultBox.textContent = result;
+        resultBox.style.display = 'block';
+        await navigator.clipboard.writeText(result);
+        showToast('Parsed & copied to clipboard!');
+        statusEl.textContent = 'Done.';
+      } catch (err) {
+        showToast('Parse failed: ' + err.message, true);
+        statusEl.textContent = 'Error: ' + err.message;
+      } finally {
+        parseBtn.disabled = false;
+      }
+    });
+
+    function showToast(msg, isError = false) {
+      toast.textContent = msg;
+      toast.className = isError ? 'error' : '';
+      toast.classList.add('show');
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // Service worker messaging: receive shared image
+    function checkSharedImage() {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'get-shared-image' });
+      }
+    }
+
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data?.type === 'shared-image') setImage(e.data.dataUrl);
+    });
+
+    // Register SW
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').then(() => {
+        checkSharedImage();
+      });
+    }
+  </script>
+</body>
+</html>
