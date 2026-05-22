@@ -1,7 +1,7 @@
 // Star Battle puzzle screenshot parser
 
 export const DEFAULTS = {
-  colorDist:   50,   // max RGB distance to merge cells into same region
+  colorDist:   50,   // max RGB distance between adjacent cells to treat as same region
   starThresh:   6,   // % of scan area that must be dark to call it a star
   markThresh:   3,   // % of scan area that must be red to call it an X
   gridThresh:  25,   // % of peak colorful-row density required to count as grid
@@ -10,64 +10,113 @@ export const DEFAULTS = {
 
 export async function parsePuzzle(imageSource, gridSize, opts = {}) {
   const o = { ...DEFAULTS, ...opts };
-  const img = await loadImage(imageSource);
-  const { canvas, ctx } = toCanvas(img);
-  const grid = findGridBounds(ctx, canvas.width, canvas.height, o.gridThresh / 100);
-  if (!grid) throw new Error('Could not detect puzzle grid');
+  const { ctx, grid, n, cellW, cellH } = await prepareGrid(imageSource, gridSize, o);
 
-  const n = gridSize;
-  const cellW = grid.w / n;
-  const cellH = grid.h / n;
-
-  const centroids = [];
-  const regions = Array.from({ length: n }, () => new Array(n).fill(0));
-  const marks = Array.from({ length: n }, () => new Array(n).fill(''));
+  const bgColors = Array.from({ length: n }, () => new Array(n).fill(null));
+  const marks    = Array.from({ length: n }, () => new Array(n).fill(''));
 
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       const cx = grid.x + (c + 0.5) * cellW;
       const cy = grid.y + (r + 0.5) * cellH;
-      const bg = sampleBackground(ctx, cx, cy, cellW, cellH);
-      regions[r][c] = matchOrCreateRegion(bg, centroids, o.colorDist);
-      marks[r][c] = detectMark(ctx, cx, cy, cellW, cellH, o.starThresh / 100, o.markThresh / 100, o.scanSize / 100);
+      bgColors[r][c] = sampleBackground(ctx, cx, cy, cellW, cellH);
+      marks[r][c]    = detectMark(ctx, cx, cy, cellW, cellH,
+                         o.starThresh / 100, o.markThresh / 100, o.scanSize / 100);
     }
   }
 
+  const regions = labelRegions(bgColors, n, o.colorDist);
   return formatOutput(regions, marks, n);
 }
 
 export async function parsePuzzleDebug(imageSource, gridSize, opts = {}) {
   const o = { ...DEFAULTS, ...opts };
-  const img = await loadImage(imageSource);
-  const { canvas, ctx } = toCanvas(img);
-  const grid = findGridBounds(ctx, canvas.width, canvas.height, o.gridThresh / 100);
-  if (!grid) throw new Error('Could not detect puzzle grid');
+  const { ctx, grid, n, cellW, cellH } = await prepareGrid(imageSource, gridSize, o);
 
-  const n = gridSize;
-  const cellW = grid.w / n;
-  const cellH = grid.h / n;
-
-  const centroids = [];
-  const regions = Array.from({ length: n }, () => new Array(n).fill(0));
-  const marks = Array.from({ length: n }, () => new Array(n).fill(''));
   const bgColors = Array.from({ length: n }, () => new Array(n).fill(null));
+  const marks    = Array.from({ length: n }, () => new Array(n).fill(''));
 
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       const cx = grid.x + (c + 0.5) * cellW;
       const cy = grid.y + (r + 0.5) * cellH;
-      const bg = sampleBackground(ctx, cx, cy, cellW, cellH);
-      regions[r][c] = matchOrCreateRegion(bg, centroids, o.colorDist);
-      marks[r][c] = detectMark(ctx, cx, cy, cellW, cellH, o.starThresh / 100, o.markThresh / 100, o.scanSize / 100);
-      bgColors[r][c] = bg;
+      bgColors[r][c] = sampleBackground(ctx, cx, cy, cellW, cellH);
+      marks[r][c]    = detectMark(ctx, cx, cy, cellW, cellH,
+                         o.starThresh / 100, o.markThresh / 100, o.scanSize / 100);
     }
   }
+
+  const regions  = labelRegions(bgColors, n, o.colorDist);
+  const numRegions = regions.flat().reduce((m, v) => Math.max(m, v), 0) + 1;
+  const centroids  = computeCentroids(bgColors, regions, n, numRegions);
 
   return {
     text: formatOutput(regions, marks, n),
     grid, cellW, cellH, n,
-    regions, marks, bgColors, centroids
+    regions, marks, bgColors, centroids,
   };
+}
+
+// ── Core helpers ──────────────────────────────────────────────────────────────
+
+async function prepareGrid(imageSource, gridSize, o) {
+  const img = await loadImage(imageSource);
+  const { canvas, ctx } = toCanvas(img);
+  const grid = findGridBounds(ctx, canvas.width, canvas.height, o.gridThresh / 100);
+  if (!grid) throw new Error('Could not detect puzzle grid');
+  const n = gridSize;
+  return { ctx, grid, n, cellW: grid.w / n, cellH: grid.h / n };
+}
+
+// Connected-component labeling: flood-fill from each unvisited cell,
+// merging a neighbor only when its color is within colorDist of the
+// current frontier cell AND it hasn't been assigned yet.
+// This means two isolated same-colored regions get different IDs.
+function labelRegions(bgColors, n, colorDist) {
+  const regions = Array.from({ length: n }, () => new Array(n).fill(-1));
+  let nextId = 0;
+
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (regions[r][c] !== -1) continue;
+
+      // BFS using a grow-in-place queue (index pointer avoids O(n²) shifts)
+      const queue = [[r, c]];
+      regions[r][c] = nextId;
+      let qi = 0;
+
+      while (qi < queue.length) {
+        const [cr, cc] = queue[qi++];
+        const color = bgColors[cr][cc];
+
+        for (const [nr, nc] of [[cr - 1, cc], [cr + 1, cc], [cr, cc - 1], [cr, cc + 1]]) {
+          if (nr < 0 || nr >= n || nc < 0 || nc >= n) continue;
+          if (regions[nr][nc] !== -1) continue;
+          if (rgbDist(color, bgColors[nr][nc]) <= colorDist) {
+            regions[nr][nc] = nextId;
+            queue.push([nr, nc]);
+          }
+        }
+      }
+
+      nextId++;
+    }
+  }
+
+  return regions;
+}
+
+// Compute per-region average color for the debug overlay
+function computeCentroids(bgColors, regions, n, numRegions) {
+  const sums = Array.from({ length: numRegions }, () => [0, 0, 0, 0]);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const id = regions[r][c];
+      const [R, G, B] = bgColors[r][c];
+      sums[id][0] += R; sums[id][1] += G; sums[id][2] += B; sums[id][3]++;
+    }
+  }
+  return sums.map(([r, g, b, cnt]) => cnt > 0 ? [r / cnt, g / cnt, b / cnt] : [128, 128, 128]);
 }
 
 function loadImage(src) {
@@ -82,24 +131,20 @@ function loadImage(src) {
 
 function toCanvas(img) {
   const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth || img.width;
+  canvas.width  = img.naturalWidth  || img.width;
   canvas.height = img.naturalHeight || img.height;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(img, 0, 0);
   return { canvas, ctx };
 }
 
-// Find the puzzle grid using per-row/column colorfulness profiles.
-// Uses OUTER EXTENT (first + last above threshold) rather than longest run,
-// so thick region borders inside the grid don't split the detection in two.
 function findGridBounds(ctx, w, h, threshFraction) {
   const data = ctx.getImageData(0, 0, w, h).data;
 
   const isColorful = (x, y) => {
     const i = (y * w + x) * 4;
     const R = data[i], G = data[i + 1], B = data[i + 2];
-    const mx = Math.max(R, G, B);
-    const mn = Math.min(R, G, B);
+    const mx = Math.max(R, G, B), mn = Math.min(R, G, B);
     return mx > 100 && (mx - mn) > 40;
   };
 
@@ -150,7 +195,7 @@ function sampleBackground(ctx, cx, cy, cellW, cellH) {
       const p = ctx.getImageData(x, y, 1, 1).data;
       const [R, G, B] = [p[0], p[1], p[2]];
       const isDark = R < 70 && G < 70 && B < 70;
-      const isRed = R > 140 && G < 120 && B < 120 && R > G + 40;
+      const isRed  = R > 140 && G < 120 && B < 120 && R > G + 40;
       if (!isDark && !isRed) pts.push([R, G, B]);
     }
   }
@@ -162,37 +207,11 @@ function sampleBackground(ctx, cx, cy, cellW, cellH) {
   return pts[Math.floor(pts.length / 2)];
 }
 
-function matchOrCreateRegion(color, centroids, threshold) {
-  let bestDist = Infinity, bestId = -1;
-  for (let i = 0; i < centroids.length; i++) {
-    const d = rgbDist(color, centroids[i]);
-    if (d < bestDist) { bestDist = d; bestId = i; }
-  }
-  if (bestDist < threshold) {
-    const c = centroids[bestId];
-    centroids[bestId] = [
-      c[0] * 0.85 + color[0] * 0.15,
-      c[1] * 0.85 + color[1] * 0.15,
-      c[2] * 0.85 + color[2] * 0.15,
-    ];
-    return bestId;
-  }
-  centroids.push([color[0], color[1], color[2]]);
-  return centroids.length - 1;
-}
-
-function rgbDist([r1, g1, b1], [r2, g2, b2]) {
-  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
-}
-
 function detectMark(ctx, cx, cy, cellW, cellH, starThresh, markThresh, scanFrac) {
-  const r = Math.max(3, Math.round(Math.min(cellW, cellH) * scanFrac));
-  const sx = Math.round(cx - r), sy = Math.round(cy - r);
-  const side = r * 2;
-  const px = ctx.getImageData(sx, sy, side, side).data;
-
+  const r  = Math.max(3, Math.round(Math.min(cellW, cellH) * scanFrac));
+  const px = ctx.getImageData(Math.round(cx - r), Math.round(cy - r), r * 2, r * 2).data;
+  const total = (r * 2) * (r * 2);
   let redCount = 0, darkCount = 0;
-  const total = side * side;
 
   for (let i = 0; i < px.length; i += 4) {
     const [R, G, B] = [px[i], px[i + 1], px[i + 2]];
@@ -201,18 +220,16 @@ function detectMark(ctx, cx, cy, cellW, cellH, starThresh, markThresh, scanFrac)
   }
 
   if (darkCount / total > starThresh) return 's';
-  if (redCount / total > markThresh) return 'x';
+  if (redCount  / total > markThresh) return 'x';
   return '';
 }
 
+function rgbDist([r1, g1, b1], [r2, g2, b2]) {
+  return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+}
+
 function formatOutput(regions, marks, n) {
-  const rows = [];
-  for (let r = 0; r < n; r++) {
-    const cols = [];
-    for (let c = 0; c < n; c++) {
-      cols.push(`${regions[r][c]}${marks[r][c]}`);
-    }
-    rows.push(cols.join(' '));
-  }
-  return rows.join('\n');
+  return Array.from({ length: n }, (_, r) =>
+    Array.from({ length: n }, (_, c) => `${regions[r][c]}${marks[r][c]}`).join(' ')
+  ).join('\n');
 }
