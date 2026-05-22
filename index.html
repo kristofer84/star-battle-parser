@@ -17,7 +17,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 24px 16px;
+      padding: 24px 16px 48px;
       gap: 16px;
     }
 
@@ -34,11 +34,10 @@
       cursor: pointer;
       transition: border-color 0.2s, background 0.2s;
       user-select: none;
-      position: relative;
     }
     #drop-zone.has-image { border-color: #a0c4ff; padding: 0; overflow: hidden; }
     #drop-zone.drag-over { border-color: #a0c4ff; background: #1e2a3a; }
-    #drop-zone canvas { width: 100%; display: block; border-radius: 10px; }
+    #drop-zone canvas { width: 100%; display: block; border-radius: 10px; pointer-events: none; }
 
     .row {
       display: flex;
@@ -46,19 +45,6 @@
       align-items: center;
       width: 100%;
       max-width: 480px;
-    }
-
-    label { font-size: 0.9rem; color: #aaa; white-space: nowrap; }
-
-    input[type=number] {
-      width: 66px;
-      padding: 8px 10px;
-      background: #0f172a;
-      border: 1px solid #334;
-      border-radius: 8px;
-      color: #e0e0e0;
-      font-size: 1rem;
-      text-align: center;
     }
 
     button {
@@ -85,7 +71,98 @@
     button.secondary:hover { background: #263548; }
     button.secondary.active { background: #0f3460; color: #a0c4ff; border: 1px solid #1d4ed8; }
 
+    input[type=number] {
+      width: 66px;
+      padding: 8px 10px;
+      background: #0f172a;
+      border: 1px solid #334;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 1rem;
+      text-align: center;
+    }
+    label.field { font-size: 0.9rem; color: #aaa; white-space: nowrap; }
+
     #file-input { display: none; }
+
+    /* Settings panel */
+    #settings {
+      width: 100%;
+      max-width: 480px;
+      background: #0f172a;
+      border: 1px solid #223;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    #settings summary {
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: #aaa;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    #settings summary::-webkit-details-marker { display: none; }
+    #settings summary::before {
+      content: '▶';
+      font-size: 0.65rem;
+      transition: transform 0.2s;
+    }
+    #settings[open] summary::before { transform: rotate(90deg); }
+    #settings summary .reset-link {
+      margin-left: auto;
+      font-size: 0.8rem;
+      color: #556;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    #settings summary .reset-link:hover { color: #a0c4ff; }
+
+    .param-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px 12px;
+      padding: 0 14px 14px;
+      align-items: center;
+    }
+    .param-label {
+      font-size: 0.82rem;
+      color: #99a;
+      line-height: 1.3;
+    }
+    .param-label small { display: block; color: #556; font-size: 0.75rem; }
+    .param-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 110px;
+      height: 4px;
+      background: #334;
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #1d4ed8;
+      cursor: pointer;
+    }
+    .param-val {
+      font-size: 0.82rem;
+      color: #e0e0e0;
+      font-variant-numeric: tabular-nums;
+      min-width: 32px;
+      text-align: right;
+    }
 
     #result-box {
       width: 100%;
@@ -102,7 +179,6 @@
       display: none;
     }
 
-    /* Debug grid overlay */
     #debug-grid {
       display: none;
       width: 100%;
@@ -146,11 +222,66 @@
   <input type="file" id="file-input" accept="image/*">
 
   <div class="row">
-    <label for="grid-size">Grid</label>
+    <label class="field" for="grid-size">Grid</label>
     <input type="number" id="grid-size" value="10" min="5" max="16" step="1">
     <button id="parse-btn" disabled>Parse &amp; Copy</button>
     <button class="secondary" id="debug-btn" disabled title="Show detected grid overlay">Grid</button>
   </div>
+
+  <details id="settings">
+    <summary>
+      Parameters
+      <span class="reset-link" id="reset-link">Reset defaults</span>
+    </summary>
+    <div class="param-grid">
+
+      <div class="param-label">
+        Color distance
+        <small>Max RGB distance to merge cells into same region. ↑ merges similar colors.</small>
+      </div>
+      <div class="param-control">
+        <input type="range" id="p-color-dist" min="10" max="120" step="5">
+        <span class="param-val" id="v-color-dist"></span>
+      </div>
+
+      <div class="param-label">
+        Star threshold
+        <small>Min % of scan area that must be dark to call it a star. ↓ detects more stars.</small>
+      </div>
+      <div class="param-control">
+        <input type="range" id="p-star-thresh" min="1" max="20" step="1">
+        <span class="param-val" id="v-star-thresh"></span>
+      </div>
+
+      <div class="param-label">
+        X mark threshold
+        <small>Min % of scan area that must be red to call it an X. ↓ detects more X marks.</small>
+      </div>
+      <div class="param-control">
+        <input type="range" id="p-mark-thresh" min="1" max="15" step="1">
+        <span class="param-val" id="v-mark-thresh"></span>
+      </div>
+
+      <div class="param-label">
+        Grid sensitivity
+        <small>Min % of peak density to count a row as grid. ↓ is more permissive.</small>
+      </div>
+      <div class="param-control">
+        <input type="range" id="p-grid-thresh" min="5" max="60" step="5">
+        <span class="param-val" id="v-grid-thresh"></span>
+      </div>
+
+      <div class="param-label">
+        Mark scan size
+        <small>% of cell half-width scanned for marks. ↑ scans a larger area.</small>
+      </div>
+      <div class="param-control">
+        <input type="range" id="p-scan-size" min="15" max="50" step="5">
+        <span class="param-val" id="v-scan-size"></span>
+      </div>
+
+    </div>
+  </details>
 
   <div id="status"></div>
   <pre id="result-box"></pre>
@@ -159,21 +290,85 @@
   <div id="toast"></div>
 
   <script type="module">
-    import { parsePuzzle, parsePuzzleDebug } from './parser.js';
+    import { parsePuzzle, parsePuzzleDebug, DEFAULTS } from './parser.js';
 
-    const dropZone = document.getElementById('drop-zone');
+    // ── DOM refs ──────────────────────────────────────────────────────────────
+    const dropZone      = document.getElementById('drop-zone');
     const previewCanvas = document.getElementById('preview-canvas');
-    const dropLabel = document.getElementById('drop-label');
-    const fileInput = document.getElementById('file-input');
-    const parseBtn = document.getElementById('parse-btn');
-    const debugBtn = document.getElementById('debug-btn');
+    const dropLabel     = document.getElementById('drop-label');
+    const fileInput     = document.getElementById('file-input');
+    const parseBtn      = document.getElementById('parse-btn');
+    const debugBtn      = document.getElementById('debug-btn');
     const gridSizeInput = document.getElementById('grid-size');
-    const resultBox = document.getElementById('result-box');
-    const statusEl = document.getElementById('status');
-    const toast = document.getElementById('toast');
-    const debugGrid = document.getElementById('debug-grid');
-    const debugCanvas = document.getElementById('debug-canvas');
+    const resultBox     = document.getElementById('result-box');
+    const statusEl      = document.getElementById('status');
+    const toast         = document.getElementById('toast');
+    const debugGrid     = document.getElementById('debug-grid');
+    const debugCanvas   = document.getElementById('debug-canvas');
+    const resetLink     = document.getElementById('reset-link');
 
+    // Parameter sliders: [slider-id, value-display-id, DEFAULTS key, unit]
+    const PARAMS = [
+      ['p-color-dist',  'v-color-dist',  'colorDist',  ''],
+      ['p-star-thresh', 'v-star-thresh', 'starThresh', '%'],
+      ['p-mark-thresh', 'v-mark-thresh', 'markThresh', '%'],
+      ['p-grid-thresh', 'v-grid-thresh', 'gridThresh', '%'],
+      ['p-scan-size',   'v-scan-size',   'scanSize',   '%'],
+    ];
+
+    // ── Settings persistence ──────────────────────────────────────────────────
+    const LS_KEY = 'star-battle-settings';
+
+    function loadSettings() {
+      try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(LS_KEY) || '{}') }; }
+      catch { return { ...DEFAULTS }; }
+    }
+
+    function saveSettings() {
+      const s = {};
+      PARAMS.forEach(([id, , key]) => { s[key] = Number(document.getElementById(id).value); });
+      s._gridSize = Number(gridSizeInput.value);
+      localStorage.setItem(LS_KEY, JSON.stringify(s));
+    }
+
+    function getOpts() {
+      const s = {};
+      PARAMS.forEach(([id, , key]) => { s[key] = Number(document.getElementById(id).value); });
+      return s;
+    }
+
+    function applySettings(s) {
+      PARAMS.forEach(([id, vid, key, unit]) => {
+        const el = document.getElementById(id);
+        const vEl = document.getElementById(vid);
+        el.value = s[key] ?? DEFAULTS[key];
+        vEl.textContent = el.value + unit;
+      });
+      if (s._gridSize) gridSizeInput.value = s._gridSize;
+    }
+
+    // Init sliders from storage
+    applySettings(loadSettings());
+
+    // Live update display + save on any slider change
+    PARAMS.forEach(([id, vid, , unit]) => {
+      const el = document.getElementById(id);
+      const vEl = document.getElementById(vid);
+      el.addEventListener('input', () => {
+        vEl.textContent = el.value + unit;
+        saveSettings();
+      });
+    });
+    gridSizeInput.addEventListener('change', saveSettings);
+
+    resetLink.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation(); // prevent closing the <details>
+      applySettings(DEFAULTS);
+      saveSettings();
+    });
+
+    // ── Image loading ─────────────────────────────────────────────────────────
     let currentDataUrl = null;
     let debugShown = false;
 
@@ -229,6 +424,7 @@
       reader.readAsDataURL(item.getAsFile());
     });
 
+    // ── Parse ─────────────────────────────────────────────────────────────────
     parseBtn.addEventListener('click', async () => {
       if (!currentDataUrl) return;
       const n = parseInt(gridSizeInput.value, 10);
@@ -238,7 +434,7 @@
       statusEl.textContent = 'Parsing…';
 
       try {
-        const result = await parsePuzzle(currentDataUrl, n);
+        const result = await parsePuzzle(currentDataUrl, n, getOpts());
         resultBox.textContent = result;
         resultBox.style.display = 'block';
         await navigator.clipboard.writeText(result);
@@ -252,7 +448,7 @@
       }
     });
 
-    // Debug grid overlay: draw detected cells over the image
+    // ── Debug overlay ─────────────────────────────────────────────────────────
     debugBtn.addEventListener('click', async () => {
       if (!currentDataUrl) return;
       const n = parseInt(gridSizeInput.value, 10);
@@ -269,9 +465,7 @@
       statusEl.textContent = 'Detecting grid…';
 
       try {
-        const info = await parsePuzzleDebug(currentDataUrl, n);
-
-        // Draw the original image plus grid overlay
+        const info = await parsePuzzleDebug(currentDataUrl, n, getOpts());
         const img = new Image();
         img.onload = () => {
           const w = img.naturalWidth, h = img.naturalHeight;
@@ -281,9 +475,8 @@
           ctx.drawImage(img, 0, 0);
 
           const { grid, cellW, cellH, regions, marks, centroids } = info;
-
-          // Semitransparent overlay per cell showing region color
-          const palette = centroids.map(([r, g, b]) => `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},0.35)`);
+          const palette = centroids.map(([r, g, b]) =>
+            `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},0.35)`);
 
           for (let r = 0; r < n; r++) {
             for (let c = 0; c < n; c++) {
@@ -291,8 +484,6 @@
               const y = grid.y + r * cellH;
               ctx.fillStyle = palette[regions[r][c]] || 'rgba(255,0,255,0.3)';
               ctx.fillRect(x, y, cellW, cellH);
-
-              // Draw region ID
               ctx.fillStyle = '#fff';
               ctx.font = `bold ${Math.round(cellW * 0.28)}px monospace`;
               ctx.textAlign = 'center';
@@ -301,7 +492,6 @@
             }
           }
 
-          // Draw grid lines
           ctx.strokeStyle = '#00ff88';
           ctx.lineWidth = Math.max(1, cellW * 0.04);
           for (let i = 0; i <= n; i++) {
@@ -318,7 +508,8 @@
           debugGrid.style.display = 'block';
           debugShown = true;
           debugBtn.classList.add('active');
-          statusEl.textContent = `Grid detected at (${grid.x},${grid.y}) ${Math.round(grid.w)}×${Math.round(grid.h)}`;
+          statusEl.textContent =
+            `Grid at (${grid.x},${grid.y}) ${Math.round(grid.w)}×${Math.round(grid.h)}px`;
         };
         img.src = currentDataUrl;
       } catch (err) {
@@ -329,6 +520,7 @@
       }
     });
 
+    // ── Toast ─────────────────────────────────────────────────────────────────
     function showToast(msg, isError = false) {
       toast.textContent = msg;
       toast.className = isError ? 'error' : '';
@@ -337,6 +529,7 @@
       toast._timer = setTimeout(() => toast.classList.remove('show'), 3000);
     }
 
+    // ── Service worker / share target ─────────────────────────────────────────
     function checkSharedImage() {
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'get-shared-image' });
@@ -348,7 +541,7 @@
     });
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').then(() => checkSharedImage());
+      navigator.serviceWorker.register('./sw.js').then(() => checkSharedImage());
     }
   </script>
 </body>

@@ -1,4 +1,4 @@
-const CACHE = 'star-battle-v1';
+const CACHE = 'star-battle-v2';
 const ASSETS = ['./', './index.html', './parser.js', './manifest.json'];
 
 self.addEventListener('install', e => {
