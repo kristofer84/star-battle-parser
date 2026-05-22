@@ -1,5 +1,5 @@
 const CACHE = 'star-battle-v1';
-const ASSETS = ['/', '/index.html', '/parser.js', '/manifest.json', '/icon-192.png', '/icon-512.png'];
+const ASSETS = ['./', './index.html', './parser.js', './manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.filter(a => !a.endsWith('.png')))));
@@ -13,7 +13,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  if (url.pathname === '/share' && e.request.method === 'POST') {
+  if (url.pathname.endsWith('/share') && e.request.method === 'POST') {
     e.respondWith(
       (async () => {
         const data = await e.request.formData();
@@ -25,12 +25,12 @@ self.addEventListener('fetch', e => {
         const allClients = await clients.matchAll({ type: 'window' });
         if (allClients.length > 0) {
           allClients[0].postMessage({ type: 'shared-image', dataUrl: `data:${mime};base64,${base64}` });
-          return Response.redirect('/', 303);
+          return Response.redirect(self.registration.scope, 303);
         }
 
         // Store for when the page opens
         await storeSharedImage(`data:${mime};base64,${base64}`);
-        return Response.redirect('/', 303);
+        return Response.redirect(self.registration.scope, 303);
       })()
     );
     return;
