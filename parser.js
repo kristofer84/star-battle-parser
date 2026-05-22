@@ -80,61 +80,64 @@ function toCanvas(img) {
   return { canvas, ctx };
 }
 
-// Find the puzzle grid by computing per-row/column brightness profiles,
-// then finding the longest continuous bright band in each axis.
-// This handles screenshots on dark phone backgrounds correctly.
+// Find the puzzle grid using per-row/column colorfulness profiles.
+// Uses OUTER EXTENT (first + last above threshold) rather than longest run,
+// so thick region borders inside the grid don't split the detection in two.
+// Uses saturation-based colorfulness rather than brightness so dark borders
+// and a dark phone background are both cleanly excluded.
 function findGridBounds(ctx, w, h) {
   const data = ctx.getImageData(0, 0, w, h).data;
 
-  const brightness = (x, y) => {
+  // A pixel is "colorful" if it has a distinct hue and is reasonably bright.
+  // Dark borders (R,G,B all <70) and grayscale phone-UI elements fail this test;
+  // the pastel/primary cell colors pass it.
+  const isColorful = (x, y) => {
     const i = (y * w + x) * 4;
-    return (data[i] + data[i + 1] + data[i + 2]) / 3;
+    const R = data[i], G = data[i + 1], B = data[i + 2];
+    const mx = Math.max(R, G, B);
+    const mn = Math.min(R, G, B);
+    return mx > 100 && (mx - mn) > 40;
   };
 
-  // Row profile: average brightness per row (sample every 2px for speed)
-  const rowBright = new Float32Array(h);
+  let rowMax = 0;
+  const rowCounts = new Float32Array(h);
   for (let y = 0; y < h; y++) {
-    let sum = 0;
-    for (let x = 0; x < w; x += 2) sum += brightness(x, y);
-    rowBright[y] = sum / (w / 2);
+    let cnt = 0;
+    for (let x = 0; x < w; x += 2) if (isColorful(x, y)) cnt++;
+    rowCounts[y] = cnt;
+    if (cnt > rowMax) rowMax = cnt;
   }
 
-  const colBright = new Float32Array(w);
+  let colMax = 0;
+  const colCounts = new Float32Array(w);
   for (let x = 0; x < w; x++) {
-    let sum = 0;
-    for (let y = 0; y < h; y += 2) sum += brightness(x, y);
-    colBright[x] = sum / (h / 2);
+    let cnt = 0;
+    for (let y = 0; y < h; y += 2) if (isColorful(x, y)) cnt++;
+    colCounts[x] = cnt;
+    if (cnt > colMax) colMax = cnt;
   }
 
-  // Find longest run above 30% of peak — that's the puzzle area
-  const rowPeak = Math.max(...rowBright);
-  const colPeak = Math.max(...colBright);
-  const { start: y0, end: y1 } = longestRun(rowBright, rowPeak * 0.30, 8);
-  const { start: x0, end: x1 } = longestRun(colBright, colPeak * 0.30, 8);
+  if (rowMax === 0 || colMax === 0) return null;
+
+  // Use FIRST and LAST row/col above 25% of peak — this spans the full grid
+  // including rows that dip low due to thick region borders inside the grid.
+  const rowThresh = rowMax * 0.25;
+  const colThresh = colMax * 0.25;
+
+  let y0 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    if (rowCounts[y] >= rowThresh) { if (y0 < 0) y0 = y; y1 = y; }
+  }
+  let x0 = -1, x1 = -1;
+  for (let x = 0; x < w; x++) {
+    if (colCounts[x] >= colThresh) { if (x0 < 0) x0 = x; x1 = x; }
+  }
 
   if (y0 < 0 || x0 < 0 || y1 <= y0 || x1 <= x0) return null;
 
-  // Inset a tiny amount to skip the outer frame border
+  // Small inset to skip the outer frame/border pixels
   const pad = Math.round(Math.min(x1 - x0, y1 - y0) * 0.012) + 1;
   return { x: x0 + pad, y: y0 + pad, w: (x1 - x0) - pad * 2, h: (y1 - y0) - pad * 2 };
-}
-
-// Longest run of values >= threshold, tolerating up to gapTol consecutive dips
-function longestRun(arr, threshold, gapTol) {
-  let bestStart = -1, bestLen = 0;
-  let start = -1, len = 0, gap = 0;
-  for (let i = 0; i < arr.length; i++) {
-    if (arr[i] >= threshold) {
-      if (start < 0) start = i;
-      len += gap + 1;
-      gap = 0;
-      if (len > bestLen) { bestLen = len; bestStart = start; }
-    } else {
-      gap++;
-      if (gap > gapTol) { start = -1; len = 0; gap = 0; }
-    }
-  }
-  return { start: bestStart, end: bestStart >= 0 ? bestStart + bestLen - 1 : -1 };
 }
 
 // Sample the cell background color.
