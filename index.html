@@ -38,7 +38,7 @@
     }
     #drop-zone.has-image { border-color: #a0c4ff; padding: 0; overflow: hidden; }
     #drop-zone.drag-over { border-color: #a0c4ff; background: #1e2a3a; }
-    #drop-zone canvas { width: 100%; display: block; border-radius: 10px; pointer-events: none; }
+    #drop-zone canvas { width: 100%; display: block; border-radius: 10px; }
 
     .row {
       display: flex;
@@ -348,7 +348,7 @@
     });
 
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').then(() => checkSharedImage());
+      navigator.serviceWorker.register('/sw.js').then(() => checkSharedImage());
     }
   </script>
 </body>
