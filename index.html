@@ -210,6 +210,21 @@
     #toast.error { background: #ef4444; }
 
     #status { font-size: 0.85rem; color: #778; min-height: 1.2em; }
+
+    #install-btn {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      background: #22c55e;
+      border-radius: 24px;
+      font-size: 0.9rem;
+      flex: none;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      z-index: 99;
+    }
+    #install-btn:hover { background: #16a34a; }
   </style>
 </head>
 <body>
@@ -287,6 +302,7 @@
   <pre id="result-box"></pre>
   <div id="debug-grid"><canvas id="debug-canvas"></canvas></div>
 
+  <button id="install-btn" aria-label="Install app">📲 Install</button>
   <div id="toast"></div>
 
   <script type="module">
@@ -543,6 +559,27 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').then(() => checkSharedImage());
     }
+
+    // ── Install prompt ────────────────────────────────────────────────────────
+    let deferredPrompt;
+    const installBtn = document.getElementById('install-btn');
+
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.style.display = 'block';
+    });
+
+    installBtn.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      installBtn.style.display = 'none';
+      if (outcome === 'accepted') showToast('App installed!');
+    });
+
+    window.addEventListener('appinstalled', () => { installBtn.style.display = 'none'; });
   </script>
 </body>
 </html>
