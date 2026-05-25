@@ -571,7 +571,10 @@
     });
 
     installBtn.addEventListener('click', async () => {
-      if (!deferredPrompt) return;
+      if (!deferredPrompt) {
+        showToast('Use browser menu → "Add to Home Screen" / "Install app"');
+        return;
+      }
       deferredPrompt.prompt();
       const { outcome } = await deferredPrompt.userChoice;
       deferredPrompt = null;
